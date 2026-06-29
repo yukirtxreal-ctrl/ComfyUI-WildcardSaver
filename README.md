@@ -21,6 +21,17 @@ generations never spams your file.
 The node also passes `prompt_text` straight through its output, so you can wire it
 into a CLIP Text Encode and save it from the same node.
 
+## How to use
+
+1. In ComfyUI, double-click the canvas, search **Save Prompt to Wildcard**, and add the node.
+2. Type or paste a prompt into the text box.
+3. Set **filename** to the wildcard you want, e.g. `hair` (the `.txt` is added for you). Sub-folders work too, like `characters/hair`.
+4. Pick **mode** — `append` adds your prompt as a new line (best for building a wildcard), `overwrite` replaces the whole file.
+5. Click the **💾 Save** button. The prompt is written to `ComfyUI/wildcards/<filename>.txt` and a small confirmation appears.
+6. Repeat with more prompts to grow the file — one prompt per line.
+
+To use what you saved, install the **Dynamic Prompts** extension and write `__filename__` in any prompt (for example `__hair__`). Each time you run, it swaps in one random line from that file.
+
 ## Where files go
 
 Files are saved to:

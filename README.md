@@ -38,12 +38,26 @@ save can be used immediately as `__filename__` in a prompt (e.g. a file named
 
 ## Install
 
-1. Copy the `ComfyUI-WildcardSaver` folder into `ComfyUI/custom_nodes/`.
-2. Restart ComfyUI and refresh the browser tab.
-3. Add the node via right-click → Add Node → `utils/wildcards`, or double-click the
-   canvas and search "Save Prompt to Wildcard".
+Clone this repository into your ComfyUI `custom_nodes` folder:
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/yukirtxreal-ctrl/ComfyUI-WildcardSaver.git
+```
+
+Then restart ComfyUI and refresh the browser tab. Add the node by double-clicking the
+canvas and searching **Save Prompt to Wildcard** (category `utils/wildcards`).
 
 No extra Python dependencies — it only uses what ComfyUI already ships with.
+
+### Updating
+
+To get the latest version later, pull inside the cloned folder:
+
+```bash
+cd ComfyUI/custom_nodes/ComfyUI-WildcardSaver
+git pull
+```
 
 ## How it works
 

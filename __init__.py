@@ -1,14 +1,18 @@
 """
 ComfyUI-WildcardSaver
 ---------------------
-A custom node with a "Save" button that writes the prompt text into a
-wildcard .txt file (one entry per line).
+Save prompts to wildcard .txt files.
 
-- Save button: writes the prompt to the file on click.
-- Auto-save toggle: also saves automatically each time you run the workflow.
+- Save button: writes the prompt on click.
+- auto_save toggle: also saves automatically each time you run the workflow.
 - Open folder button: opens the wildcards folder in your file manager.
 
-Duplicate lines are skipped in append mode, so nothing gets spammed.
+Modes:
+- append    : add the prompt as a new line in one file (duplicates skipped).
+- overwrite : replace the file with the prompt.
+- numbered  : write a NEW file every time (name_00001.txt, name_00002.txt, ...)
+              so every generation is saved, even with the same prompt.
+
 Default save location: <ComfyUI>/wildcards/<filename>.txt
 """
 
@@ -24,7 +28,6 @@ except Exception:  # pragma: no cover - only happens outside a running ComfyUI
 
 
 def _comfy_base():
-    """Return the ComfyUI root path (or a sensible fallback)."""
     try:
         import folder_paths
         return folder_paths.base_path
@@ -33,7 +36,6 @@ def _comfy_base():
 
 
 def _wildcards_dir(folder=""):
-    """Return (and create) the wildcards root to save into."""
     folder = (folder or "").strip().replace("\\", "/")
     if not folder:
         root = os.path.join(_comfy_base(), "wildcards")
@@ -47,7 +49,6 @@ def _wildcards_dir(folder=""):
 
 
 def _resolve_path(filename, folder=""):
-    """Resolve a filename to a safe path inside the wildcards root."""
     root = os.path.normpath(_wildcards_dir(folder))
     filename = (filename or "").strip()
     if not filename:
@@ -55,15 +56,24 @@ def _resolve_path(filename, folder=""):
     filename = filename.replace("\\", "/").lstrip("/")
     if not filename.lower().endswith(".txt"):
         filename += ".txt"
-
     full = os.path.normpath(os.path.join(root, filename))
     if os.path.commonpath([full, root]) != root:
         raise ValueError("Filename escapes the wildcards folder")
     return root, full
 
 
+def _numbered_path(base_full):
+    """Return the next free <stem>_00001.txt path (00002, 00003, ...)."""
+    stem = base_full[:-4] if base_full.lower().endswith(".txt") else base_full
+    n = 1
+    while True:
+        cand = f"{stem}_{n:05d}.txt"
+        if not os.path.exists(cand):
+            return cand
+        n += 1
+
+
 def _collapse(text):
-    """Whole text box becomes one wildcard line (internal newlines -> spaces)."""
     text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
     return " ".join(part.strip() for part in text.split("\n") if part.strip())
 
@@ -76,13 +86,22 @@ def _count_lines(path):
 
 
 def _save(text, filename, mode, folder=""):
-    """Write text to the wildcard file. Returns (path, line_count, added)."""
-    _root, path = _resolve_path(filename, folder)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    """Write text to a wildcard file. Returns (path_written, line_count, added)."""
+    _root, base = _resolve_path(filename, folder)
     text = _collapse(text)
     if not text:
-        return path, _count_lines(path), False
+        return base, _count_lines(base), False
 
+    # numbered: brand-new file every time, so nothing is ever skipped
+    if mode == "numbered":
+        path = _numbered_path(base)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text + "\n")
+        return path, 1, True
+
+    path = base
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     added = True
     if mode == "overwrite":
         with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -103,12 +122,10 @@ def _save(text, filename, mode, folder=""):
                         prefix = "\n"
             with open(path, "a", encoding="utf-8", newline="\n") as f:
                 f.write(prefix + text + "\n")
-
     return path, _count_lines(path), added
 
 
 def _open_folder_of(filename, folder=""):
-    """Open the folder that holds the wildcard file in the OS file manager."""
     _root, path = _resolve_path(filename, folder)
     target = os.path.dirname(path)
     os.makedirs(target, exist_ok=True)
@@ -163,7 +180,7 @@ if PromptServer is not None:
 
 # --- The node ----------------------------------------------------------------
 class SavePromptToWildcard:
-    """Save prompts to a wildcard file - by button, or automatically each run."""
+    """Save prompts to wildcard files - by button, or automatically each run."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -178,12 +195,14 @@ class SavePromptToWildcard:
                     "default": "",
                     "tooltip": "Blank = ComfyUI/wildcards. Or set your extension's wildcards folder.",
                 }),
-                "mode": (["append", "overwrite"],),
+                "mode": (["append", "overwrite", "numbered"], {
+                    "tooltip": "append: one file, new line (dupes skipped). overwrite: replace. numbered: a NEW file every save (name_00001.txt ...), nothing skipped.",
+                }),
                 "auto_save": ("BOOLEAN", {
                     "default": False,
                     "label_on": "on",
                     "label_off": "off",
-                    "tooltip": "Save the prompt automatically each run (duplicates skipped).",
+                    "tooltip": "Save automatically on every run. With mode=numbered, every generation is saved.",
                 }),
             }
         }
@@ -194,10 +213,19 @@ class SavePromptToWildcard:
     CATEGORY = "utils/wildcards"
     OUTPUT_NODE = True
     DESCRIPTION = (
-        "Save prompts to a wildcard .txt file. Click the Save button, or turn on "
-        "auto_save to store the prompt every time you run. The Open folder button "
-        "reveals the file in your file manager. Duplicate lines are skipped."
+        "Save prompts to wildcard .txt files. Click Save, or turn on auto_save to "
+        "store the prompt every run. Use mode=numbered to write a new file each "
+        "time (name_00001.txt, name_00002.txt, ...) so every generation is saved "
+        "even with the same prompt. Open folder reveals the files."
     )
+
+    @classmethod
+    def IS_CHANGED(cls, prompt_text, filename, mode, folder="", auto_save=False, **kw):
+        # When auto-saving, force a re-run on every queue so EVERY generation is
+        # saved — even if the prompt / filename didn't change since last time.
+        if auto_save:
+            return float("NaN")
+        return f"{prompt_text}|{filename}|{folder}|{mode}"
 
     def run(self, prompt_text, filename, mode, folder="", auto_save=False):
         if auto_save and (prompt_text or "").strip():

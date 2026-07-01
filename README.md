@@ -16,8 +16,8 @@ generations never spams your file.
 | `prompt_text` | The text to save. The whole box is saved as **one line** (one wildcard option). |
 | `filename` | Target file. `.txt` is added automatically. Sub-folders work, e.g. `characters/hair`. |
 | `folder` | Where to save. **Blank = `ComfyUI/wildcards`.** Set it to your wildcard extension's folder (see the table below) so saves land where they're actually read. An absolute path like `D:/wildcards` works too. |
-| `mode` | `append` adds the prompt as a new line (duplicates are skipped); `overwrite` replaces the file. |
-| `auto_save` | When **on**, the prompt is saved automatically every time you run the workflow (duplicates skipped, so it won't spam the file). |
+| `mode` | `append` adds the prompt as a new line (duplicates skipped); `overwrite` replaces the file; `numbered` writes a **new file every save** (`name_00001.txt`, `name_00002.txt`, …) so every generation is kept, even identical prompts. |
+| `auto_save` | When **on**, the prompt is saved automatically every time you run. Pair with `mode = numbered` to keep **every** generation as its own numbered file; with `append` it adds new lines (duplicates skipped). |
 | Save button | Writes the current prompt to the file and shows a confirmation. |
 | Open folder button | Opens the wildcards folder in your file manager. |
 

@@ -2,16 +2,19 @@
 ComfyUI-WildcardSaver
 ---------------------
 A custom node with a "Save" button that writes the prompt text into a
-wildcard .txt file (one entry per line). Saving is triggered by the button on
-the node -- NOT by running the workflow -- so queued generations never spam the
-file.
+wildcard .txt file (one entry per line).
 
+- Save button: writes the prompt to the file on click.
+- Auto-save toggle: also saves automatically each time you run the workflow.
+- Open folder button: opens the wildcards folder in your file manager.
+
+Duplicate lines are skipped in append mode, so nothing gets spammed.
 Default save location: <ComfyUI>/wildcards/<filename>.txt
-Set the optional "folder" field to save straight into a specific wildcards
-folder (e.g. your Dynamic Prompts or Impact Pack folder).
 """
 
 import os
+import sys
+import subprocess
 from aiohttp import web
 
 try:
@@ -26,17 +29,11 @@ def _comfy_base():
         import folder_paths
         return folder_paths.base_path
     except Exception:
-        # Fallback: .../ComfyUI/custom_nodes/<this_pack> -> go up two levels
         return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def _wildcards_dir(folder=""):
-    """Return (and create) the wildcards root to save into.
-
-    - folder blank            -> <ComfyUI>/wildcards
-    - folder is absolute      -> that folder
-    - folder is relative      -> <ComfyUI>/<folder>
-    """
+    """Return (and create) the wildcards root to save into."""
     folder = (folder or "").strip().replace("\\", "/")
     if not folder:
         root = os.path.join(_comfy_base(), "wildcards")
@@ -50,11 +47,7 @@ def _wildcards_dir(folder=""):
 
 
 def _resolve_path(filename, folder=""):
-    """Resolve a user-supplied filename to a safe path inside the wildcards root.
-
-    Supports sub-folders (e.g. "characters/hair") and protects against path
-    traversal (".." escaping the chosen wildcards root).
-    """
+    """Resolve a filename to a safe path inside the wildcards root."""
     root = os.path.normpath(_wildcards_dir(folder))
     filename = (filename or "").strip()
     if not filename:
@@ -64,41 +57,71 @@ def _resolve_path(filename, folder=""):
         filename += ".txt"
 
     full = os.path.normpath(os.path.join(root, filename))
-    # Ensure the resolved path is still inside the wildcards root.
     if os.path.commonpath([full, root]) != root:
         raise ValueError("Filename escapes the wildcards folder")
     return root, full
 
 
+def _collapse(text):
+    """Whole text box becomes one wildcard line (internal newlines -> spaces)."""
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    return " ".join(part.strip() for part in text.split("\n") if part.strip())
+
+
+def _count_lines(path):
+    if not os.path.exists(path):
+        return 0
+    with open(path, "r", encoding="utf-8") as f:
+        return sum(1 for ln in f.read().split("\n") if ln.strip())
+
+
 def _save(text, filename, mode, folder=""):
-    """Write text to the wildcard file. Returns (path, non_empty_line_count)."""
+    """Write text to the wildcard file. Returns (path, line_count, added)."""
     _root, path = _resolve_path(filename, folder)
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    text = _collapse(text)
+    if not text:
+        return path, _count_lines(path), False
 
-    # Treat the whole text box as ONE wildcard entry (one line/option):
-    # collapse any internal line breaks into single spaces.
-    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
-    text = " ".join(part.strip() for part in text.split("\n") if part.strip())
-
+    added = True
     if mode == "overwrite":
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(text + "\n")
-    else:  # append
-        prefix = ""
-        if os.path.exists(path) and os.path.getsize(path) > 0:
-            with open(path, "rb") as f:
-                f.seek(-1, os.SEEK_END)
-                if f.read(1) != b"\n":
-                    prefix = "\n"  # make sure we start on a fresh line
-        with open(path, "a", encoding="utf-8", newline="\n") as f:
-            f.write(prefix + text + "\n")
+    else:  # append, but skip if the exact line already exists
+        existing = []
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                existing = [ln.rstrip("\n") for ln in f.read().split("\n")]
+        if text in existing:
+            added = False
+        else:
+            prefix = ""
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                with open(path, "rb") as f:
+                    f.seek(-1, os.SEEK_END)
+                    if f.read(1) != b"\n":
+                        prefix = "\n"
+            with open(path, "a", encoding="utf-8", newline="\n") as f:
+                f.write(prefix + text + "\n")
 
-    with open(path, "r", encoding="utf-8") as f:
-        line_count = sum(1 for ln in f.read().split("\n") if ln.strip())
-    return path, line_count
+    return path, _count_lines(path), added
 
 
-# --- Backend API route the button calls -------------------------------------
+def _open_folder_of(filename, folder=""):
+    """Open the folder that holds the wildcard file in the OS file manager."""
+    _root, path = _resolve_path(filename, folder)
+    target = os.path.dirname(path)
+    os.makedirs(target, exist_ok=True)
+    if sys.platform.startswith("win"):
+        os.startfile(target)  # noqa: S606 - local convenience
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", target])
+    else:
+        subprocess.Popen(["xdg-open", target])
+    return target
+
+
+# --- Backend API routes -----------------------------------------------------
 if PromptServer is not None:
 
     @PromptServer.instance.routes.post("/wildcard_saver/save")
@@ -109,18 +132,30 @@ if PromptServer is not None:
             filename = data.get("filename", "my_wildcard.txt")
             mode = data.get("mode", "append")
             folder = data.get("folder", "")
-
             if not (text or "").strip():
                 return web.json_response(
                     {"status": "error", "message": "Prompt text is empty."},
                     status=400,
                 )
-
-            path, lines = _save(text, filename, mode, folder)
+            path, lines, added = _save(text, filename, mode, folder)
             return web.json_response(
-                {"status": "ok", "path": path, "lines": lines, "mode": mode}
+                {"status": "ok", "path": path, "lines": lines,
+                 "mode": mode, "added": added}
             )
-        except Exception as e:  # noqa: BLE001 - surface any error to the UI
+        except Exception as e:  # noqa: BLE001
+            return web.json_response(
+                {"status": "error", "message": str(e)}, status=500
+            )
+
+    @PromptServer.instance.routes.post("/wildcard_saver/open_folder")
+    async def _wildcard_saver_open_folder(request):
+        try:
+            data = await request.json()
+            filename = data.get("filename", "my_wildcard.txt")
+            folder = data.get("folder", "")
+            target = _open_folder_of(filename, folder)
+            return web.json_response({"status": "ok", "path": target})
+        except Exception as e:  # noqa: BLE001
             return web.json_response(
                 {"status": "error", "message": str(e)}, status=500
             )
@@ -128,7 +163,7 @@ if PromptServer is not None:
 
 # --- The node ----------------------------------------------------------------
 class SavePromptToWildcard:
-    """Type a prompt, click the button, and it's appended to a wildcard file."""
+    """Save prompts to a wildcard file - by button, or automatically each run."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -144,6 +179,12 @@ class SavePromptToWildcard:
                     "tooltip": "Blank = ComfyUI/wildcards. Or set your extension's wildcards folder.",
                 }),
                 "mode": (["append", "overwrite"],),
+                "auto_save": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "on",
+                    "label_off": "off",
+                    "tooltip": "Save the prompt automatically each run (duplicates skipped).",
+                }),
             }
         }
 
@@ -151,18 +192,19 @@ class SavePromptToWildcard:
     RETURN_NAMES = ("prompt_text",)
     FUNCTION = "run"
     CATEGORY = "utils/wildcards"
-    OUTPUT_NODE = False
+    OUTPUT_NODE = True
     DESCRIPTION = (
-        "Type a prompt and press the Save button to append it as a new line in a "
-        "wildcard .txt file. Saves to ComfyUI/wildcards by default, or set the "
-        "'folder' field to save straight into your wildcard extension's folder. "
-        "The text is also passed through the output. Saving happens on button "
-        "click, not when the workflow runs."
+        "Save prompts to a wildcard .txt file. Click the Save button, or turn on "
+        "auto_save to store the prompt every time you run. The Open folder button "
+        "reveals the file in your file manager. Duplicate lines are skipped."
     )
 
-    def run(self, prompt_text, filename, mode, folder=""):
-        # Intentionally a no-op passthrough: saving is done by the button so that
-        # queueing a workflow does not repeatedly write to the file.
+    def run(self, prompt_text, filename, mode, folder="", auto_save=False):
+        if auto_save and (prompt_text or "").strip():
+            try:
+                _save(prompt_text, filename, mode, folder)
+            except Exception as e:  # noqa: BLE001 - never break a render over this
+                print(f"[WildcardSaver] auto-save failed: {e}")
         return (prompt_text,)
 
 

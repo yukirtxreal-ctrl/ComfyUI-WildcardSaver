@@ -35,6 +35,7 @@ app.registerExtension({
                     const widget = (name) => this.widgets?.find((w) => w.name === name);
                     const text = widget("prompt_text")?.value ?? "";
                     const filename = widget("filename")?.value ?? "my_wildcard.txt";
+                    const folder = widget("folder")?.value ?? "";
                     const mode = widget("mode")?.value ?? "append";
 
                     if (!text || !text.trim()) {
@@ -51,7 +52,7 @@ app.registerExtension({
                         const resp = await api.fetchApi("/wildcard_saver/save", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ text, filename, mode }),
+                            body: JSON.stringify({ text, filename, folder, mode }),
                         });
                         const result = await resp.json();
 

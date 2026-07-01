@@ -7,6 +7,8 @@ the node -- NOT by running the workflow -- so queued generations never spam the
 file.
 
 Default save location: <ComfyUI>/wildcards/<filename>.txt
+Set the optional "folder" field to save straight into a specific wildcards
+folder (e.g. your Dynamic Prompts or Impact Pack folder).
 """
 
 import os
@@ -18,27 +20,42 @@ except Exception:  # pragma: no cover - only happens outside a running ComfyUI
     PromptServer = None
 
 
-def _wildcards_dir():
-    """Return (and create) the <ComfyUI>/wildcards directory."""
-    base = None
+def _comfy_base():
+    """Return the ComfyUI root path (or a sensible fallback)."""
     try:
         import folder_paths
-        base = folder_paths.base_path
+        return folder_paths.base_path
     except Exception:
         # Fallback: .../ComfyUI/custom_nodes/<this_pack> -> go up two levels
-        base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    d = os.path.join(base, "wildcards")
-    os.makedirs(d, exist_ok=True)
-    return d
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
-def _resolve_path(filename):
-    """Resolve a user-supplied filename to a safe path inside the wildcards dir.
+def _wildcards_dir(folder=""):
+    """Return (and create) the wildcards root to save into.
+
+    - folder blank            -> <ComfyUI>/wildcards
+    - folder is absolute      -> that folder
+    - folder is relative      -> <ComfyUI>/<folder>
+    """
+    folder = (folder or "").strip().replace("\\", "/")
+    if not folder:
+        root = os.path.join(_comfy_base(), "wildcards")
+    elif os.path.isabs(folder):
+        root = folder
+    else:
+        root = os.path.join(_comfy_base(), folder)
+    root = os.path.normpath(root)
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _resolve_path(filename, folder=""):
+    """Resolve a user-supplied filename to a safe path inside the wildcards root.
 
     Supports sub-folders (e.g. "characters/hair") and protects against path
-    traversal (".." escaping the wildcards root).
+    traversal (".." escaping the chosen wildcards root).
     """
-    root = os.path.normpath(_wildcards_dir())
+    root = os.path.normpath(_wildcards_dir(folder))
     filename = (filename or "").strip()
     if not filename:
         filename = "my_wildcard.txt"
@@ -49,13 +66,13 @@ def _resolve_path(filename):
     full = os.path.normpath(os.path.join(root, filename))
     # Ensure the resolved path is still inside the wildcards root.
     if os.path.commonpath([full, root]) != root:
-        raise ValueError("Filename escapes the wildcards directory")
+        raise ValueError("Filename escapes the wildcards folder")
     return root, full
 
 
-def _save(text, filename, mode):
+def _save(text, filename, mode, folder=""):
     """Write text to the wildcard file. Returns (path, non_empty_line_count)."""
-    _root, path = _resolve_path(filename)
+    _root, path = _resolve_path(filename, folder)
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     # Treat the whole text box as ONE wildcard entry (one line/option):
@@ -91,6 +108,7 @@ if PromptServer is not None:
             text = data.get("text", "")
             filename = data.get("filename", "my_wildcard.txt")
             mode = data.get("mode", "append")
+            folder = data.get("folder", "")
 
             if not (text or "").strip():
                 return web.json_response(
@@ -98,7 +116,7 @@ if PromptServer is not None:
                     status=400,
                 )
 
-            path, lines = _save(text, filename, mode)
+            path, lines = _save(text, filename, mode, folder)
             return web.json_response(
                 {"status": "ok", "path": path, "lines": lines, "mode": mode}
             )
@@ -117,7 +135,14 @@ class SavePromptToWildcard:
         return {
             "required": {
                 "prompt_text": ("STRING", {"multiline": True, "default": ""}),
-                "filename": ("STRING", {"default": "my_wildcard.txt"}),
+                "filename": ("STRING", {
+                    "default": "my_wildcard.txt",
+                    "tooltip": "File name (.txt added automatically). Sub-folders work: characters/hair",
+                }),
+                "folder": ("STRING", {
+                    "default": "",
+                    "tooltip": "Blank = ComfyUI/wildcards. Or set your extension's wildcards folder.",
+                }),
                 "mode": (["append", "overwrite"],),
             }
         }
@@ -129,12 +154,13 @@ class SavePromptToWildcard:
     OUTPUT_NODE = False
     DESCRIPTION = (
         "Type a prompt and press the Save button to append it as a new line in a "
-        "wildcard .txt file (saved to ComfyUI/wildcards). The text is also passed "
-        "through the output so you can keep using it in the graph. Saving happens "
-        "on button click, not when the workflow runs."
+        "wildcard .txt file. Saves to ComfyUI/wildcards by default, or set the "
+        "'folder' field to save straight into your wildcard extension's folder. "
+        "The text is also passed through the output. Saving happens on button "
+        "click, not when the workflow runs."
     )
 
-    def run(self, prompt_text, filename, mode):
+    def run(self, prompt_text, filename, mode, folder=""):
         # Intentionally a no-op passthrough: saving is done by the button so that
         # queueing a workflow does not repeatedly write to the file.
         return (prompt_text,)

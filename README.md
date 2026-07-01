@@ -94,6 +94,16 @@ These all work in both Dynamic Prompts and Impact Pack:
 - Wildcard names are case-insensitive in Impact Pack (`__Hair__` = `__hair__`).
 - `.txt` is the simplest format; both extensions also support `.yaml` collections if you like nested categories.
 
+## Example workflow
+
+The `example_workflows/` folder has **`gummy_autosave_workflow.json`** — a Qwen-Image
+graph where a Dynamic Prompts *Random Prompts* node feeds both the image and this node
+(set to `auto_save` + `numbered`), so every generation writes a new `gummy_00001.txt`,
+`gummy_00002.txt`, … Drag it onto the ComfyUI canvas and swap in your own model names.
+
+> Restart ComfyUI after installing/updating the node so the new modes load, **then**
+> load the workflow.
+
 ## Install
 
 Clone this repository into your ComfyUI `custom_nodes` folder:
